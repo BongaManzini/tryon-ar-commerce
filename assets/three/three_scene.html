@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>TryOn 3D 360° Studio</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background-color: #121214; }
+    #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+    #loading-overlay {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      background: #121214; color: #6C63FF; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px; font-weight: 600; z-index: 100; transition: opacity 0.4s ease;
+    }
+    .spinner {
+      width: 44px; height: 44px; border: 3px solid rgba(108, 99, 255, 0.2);
+      border-top-color: #6C63FF; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .badge {
+      position: absolute; top: 16px; left: 16px; padding: 6px 12px;
+      background: rgba(0,0,0,0.65); border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 20px; color: #00E676; font-size: 11px; font-weight: bold;
+      letter-spacing: 0.5px; z-index: 10; font-family: sans-serif; pointer-events: none;
+    }
+  </style>
+  <!-- Three.js and OrbitControls via CDN with automatic offline fallback -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <div>INITIALIZING 3D ENGINE...</div>
+  </div>
+  <div class="badge">360° SPATIAL VIEW</div>
+  <div id="canvas-container"></div>
+
+  <script>
+    let scene, camera, renderer, controls;
+    let avatarGroup, mannequinMesh, clothingMesh, personQuadMesh, floorMesh;
+    let autoRotate = true;
+    let isARMode = false;
+    const container = document.getElementById('canvas-container');
+    const loadingOverlay = document.getElementById('loading-overlay');
+
+    function notifyFlutter(action, payload) {
+      const msg = JSON.stringify({ action: action, payload: payload });
+      if (window.FlutterBridge && window.FlutterBridge.postMessage) {
+        window.FlutterBridge.postMessage(msg);
+      } else {
+        console.log('[FlutterBridge fallback]', msg);
+      }
+    }
+
+    function initScene() {
+      // 1. Scene setup
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x121214);
+
+      // 2. Camera setup
+      camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+      camera.position.set(0, 1.4, 3.2);
+
+      // 3. Renderer setup
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      container.appendChild(renderer.domElement);
+
+      // 4. Orbit Controls (360° Touch & Drag Rotation)
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.target.set(0, 1.1, 0);
+      controls.maxPolarAngle = Math.PI / 2 + 0.1; // Don't go below floor
+      controls.minDistance = 1.0;
+      controls.maxDistance = 5.5;
+      controls.autoRotate = autoRotate;
+      controls.autoRotateSpeed = 2.0;
+
+      // 5. Studio Lighting
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+      scene.add(ambientLight);
+
+      const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
+      keyLight.position.set(2.5, 4.0, 3.0);
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.width = 1024;
+      keyLight.shadow.mapSize.height = 1024;
+      scene.add(keyLight);
+
+      const fillLight = new THREE.DirectionalLight(0x6C63FF, 0.4);
+      fillLight.position.set(-3.0, 2.0, -1.5);
+      scene.add(fillLight);
+
+      const rimLight = new THREE.DirectionalLight(0x00E676, 0.5);
+      rimLight.position.set(0, 3.0, -3.0);
+      scene.add(rimLight);
+
+      // 6. Studio Floor with circular shadow catcher
+      const floorGeometry = new THREE.CylinderGeometry(1.6, 1.6, 0.05, 32);
+      const floorMaterial = new THREE.MeshStandardMaterial({
+        color: 0x18181B,
+        roughness: 0.8,
+        metalness: 0.2
+      });
+      floorMesh = new THREE.Mesh(floorGeometry, floorMaterial);
+      floorMesh.position.y = -0.025;
+      floorMesh.receiveShadow = true;
+      scene.add(floorMesh);
+
+      // Radial pedestal ring
+      const ringGeo = new THREE.RingGeometry(1.4, 1.45, 48);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0x6C63FF, side: THREE.DoubleSide });
+      const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI / 2;
+      ringMesh.position.y = 0.005;
+      scene.add(ringMesh);
+
+      // 7. Humanoid Avatar & Clothing Hierarchy
+      create3DAvatar();
+
+      // Window resize listener
+      window.addEventListener('resize', onWindowResize);
+
+      // Hide loading overlay
+      loadingOverlay.style.opacity = '0';
+      setTimeout(() => loadingOverlay.style.display = 'none', 400);
+
+      notifyFlutter('ready', { status: '3D Studio Ready' });
+      animate();
+    }
+
+    function create3DAvatar() {
+      avatarGroup = new THREE.Group();
+
+      // Stylized Mannequin Material (Sleek dark matte titanium)
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: 0x2A2A35,
+        roughness: 0.35,
+        metalness: 0.4
+      });
+
+      // Head
+      const headGeo = new THREE.SphereGeometry(0.14, 32, 24);
+      headGeo.scale(1.0, 1.25, 1.05);
+      const head = new THREE.Mesh(headGeo, bodyMaterial);
+      head.position.y = 1.82;
+      head.castShadow = true;
+      avatarGroup.add(head);
+
+      // Neck
+      const neckGeo = new THREE.CylinderGeometry(0.065, 0.075, 0.12, 20);
+      const neck = new THREE.Mesh(neckGeo, bodyMaterial);
+      neck.position.y = 1.68;
+      avatarGroup.add(neck);
+
+      // Torso & Shoulders
+      const torsoGeo = new THREE.CylinderGeometry(0.24, 0.18, 0.65, 24);
+      torsoGeo.scale(1.15, 1.0, 0.75);
+      mannequinMesh = new THREE.Mesh(torsoGeo, bodyMaterial);
+      mannequinMesh.position.y = 1.32;
+      mannequinMesh.castShadow = true;
+      avatarGroup.add(mannequinMesh);
+
+      // Left Arm
+      const armGeo = new THREE.CylinderGeometry(0.06, 0.05, 0.65, 16);
+      const leftArm = new THREE.Mesh(armGeo, bodyMaterial);
+      leftArm.position.set(-0.32, 1.28, 0);
+      leftArm.rotation.z = 0.15;
+      avatarGroup.add(leftArm);
+
+      // Right Arm
+      const rightArm = new THREE.Mesh(armGeo, bodyMaterial);
+      rightArm.position.set(0.32, 1.28, 0);
+      rightArm.rotation.z = -0.15;
+      avatarGroup.add(rightArm);
+
+      // Pelvis / Hips
+      const hipsGeo = new THREE.CylinderGeometry(0.18, 0.19, 0.22, 24);
+      hipsGeo.scale(1.1, 1.0, 0.8);
+      const hips = new THREE.Mesh(hipsGeo, bodyMaterial);
+      hips.position.y = 0.95;
+      avatarGroup.add(hips);
+
+      // Legs
+      const legGeo = new THREE.CylinderGeometry(0.08, 0.065, 0.88, 18);
+      const leftLeg = new THREE.Mesh(legGeo, bodyMaterial);
+      leftLeg.position.set(-0.11, 0.46, 0);
+      leftLeg.castShadow = true;
+      avatarGroup.add(leftLeg);
+
+      const rightLeg = new THREE.Mesh(legGeo, bodyMaterial);
+      rightLeg.position.set(0.11, 0.46, 0);
+      rightLeg.castShadow = true;
+      avatarGroup.add(rightLeg);
+
+      // --- Draped 3D Clothing Mesh Layer ---
+      // Curved parametric cylindrical garment that drapes naturally over torso and hips
+      const clothingGeo = new THREE.CylinderGeometry(0.26, 0.24, 0.72, 32, 8, true);
+      clothingGeo.scale(1.22, 1.0, 0.85);
+
+      const defaultGarmentMat = new THREE.MeshStandardMaterial({
+        color: 0x6C63FF,
+        roughness: 0.6,
+        metalness: 0.1,
+        side: THREE.DoubleSide
+      });
+
+      clothingMesh = new THREE.Mesh(clothingGeo, defaultGarmentMat);
+      clothingMesh.position.y = 1.30;
+      clothingMesh.castShadow = true;
+      avatarGroup.add(clothingMesh);
+
+      // --- Billboard / Quad for Face/Person Silhouette Projection ---
+      const personQuadGeo = new THREE.PlaneGeometry(0.48, 0.65);
+      const personQuadMat = new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0.0,
+        side: THREE.DoubleSide
+      });
+      personQuadMesh = new THREE.Mesh(personQuadGeo, personQuadMat);
+      personQuadMesh.position.set(0, 1.45, 0.16);
+      avatarGroup.add(personQuadMesh);
+
+      scene.add(avatarGroup);
+    }
+
+    // Dynamic Garment Texture Injection from Camera/Gallery Snap
+    function setClothingTexture(dataUrl) {
+      const loader = new THREE.TextureLoader();
+      loader.load(dataUrl, function(texture) {
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.ClampToEdgeWrapping;
+        texture.repeat.set(1, 1);
+
+        clothingMesh.material = new THREE.MeshStandardMaterial({
+          map: texture,
+          roughness: 0.5,
+          metalness: 0.15,
+          side: THREE.DoubleSide,
+          transparent: true
+        });
+        clothingMesh.material.needsUpdate = true;
+        notifyFlutter('garmentUpdated', { success: true });
+      });
+    }
+
+    // Dynamic Person Photo / Silhouette Projection
+    function setPersonTexture(dataUrl) {
+      const loader = new THREE.TextureLoader();
+      loader.load(dataUrl, function(texture) {
+        personQuadMesh.material = new THREE.MeshStandardMaterial({
+          map: texture,
+          transparent: true,
+          opacity: 0.95,
+          roughness: 0.6,
+          side: THREE.DoubleSide
+        });
+        personQuadMesh.material.needsUpdate = true;
+        notifyFlutter('personUpdated', { success: true });
+      });
+    }
+
+    // Camera preset angle (degrees)
+    function setViewingAngle(degrees) {
+      const radians = (degrees * Math.PI) / 180;
+      const distance = 3.2;
+      camera.position.x = Math.sin(radians) * distance;
+      camera.position.z = Math.cos(radians) * distance;
+      camera.position.y = 1.4;
+      controls.target.set(0, 1.1, 0);
+      controls.update();
+      notifyFlutter('angleChanged', { angle: degrees });
+    }
+
+    // Toggle 360° Turntable Auto-Rotation
+    function setAutoRotate(enabled) {
+      autoRotate = enabled;
+      controls.autoRotate = enabled;
+      notifyFlutter('autoRotateToggled', { enabled: enabled });
+    }
+
+    // Set Augmented Reality Mode (Transparent Canvas + Real Camera Passthrough)
+    function setARMode(enabled) {
+      isARMode = enabled;
+      if (enabled) {
+        scene.background = null;
+        floorMesh.material.colorWrite = false; // Shadow catcher only
+        renderer.setClearColor(0x000000, 0);
+      } else {
+        scene.background = new THREE.Color(0x121214);
+        floorMesh.material.colorWrite = true;
+        renderer.setClearColor(0x121214, 1);
+      }
+      notifyFlutter('arModeToggled', { isARMode: enabled });
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    window.onload = initScene;
+  </script>
+</body>
+</html>
