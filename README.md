@@ -11,17 +11,17 @@ Fully configured with cross-platform availability for **Android** and **iPhone (
 ```
 lib/
 ├── app/
-│   ├── app.dart                   # MaterialApp.router with ThemeMode
-│   ├── routes.dart                # GoRouter route declarations & persistent Shell navbar
-│   └── theme.dart                 # Dark/light luxury & streetwear fashion aesthetic
+│  ├── app.dart          # MaterialApp.router with ThemeMode
+│  ├── routes.dart        # GoRouter route declarations & persistent Shell navbar
+│  └── theme.dart         # Dark/light luxury & streetwear fashion aesthetic
 ├── core/
-│   ├── constants/                 # Assets, storage boxes, routes, affiliate defaults
-│   ├── errors/                    # AppException hierarchy & domain Failure definitions
-│   ├── services/
-│   │   ├── camera_service.dart    # Camera controller & frame acquisition
-│   │   ├── deep_link_service.dart # Inbound universal links (tryon://, https://fitpreview.com)
-│   │   └── storage_service.dart   # Hive local storage abstraction
-│   └── utils/                     # Matrix4 decomposition/serialization, alpha mask blending
+│  ├── constants/         # Assets, storage boxes, routes, affiliate defaults
+│  ├── errors/          # AppException hierarchy & domain Failure definitions
+│  ├── services/
+│  │  ├── camera_service.dart  # Camera controller & frame acquisition
+│  │  ├── deep_link_service.dart # Inbound universal links (tryon://, https://fitpreview.com)
+│  │  └── storage_service.dart  # Hive local storage abstraction
+│  └── utils/           # Matrix4 decomposition/serialization, alpha mask blending
 └── features/
     ├── segmentation/              # ML Kit Selfie Segmentation pipeline
     │   ├── data/
